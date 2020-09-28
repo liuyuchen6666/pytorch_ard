@@ -21,20 +21,22 @@ class LinearARD(nn.Module):
             self.bias = Parameter(torch.Tensor(out_features))
         else:
             self.register_parameter('bias', None)
-        self.ard_init = ard_init
+        self.ard_init = ard_init #
         self.log_sigma2 = Parameter(torch.Tensor(out_features, in_features))
+        #对应于dropout概率的参数  定义为sigma的平方的对数
         self.reset_parameters()
 
     def forward(self, input):
         if self.training:
             epsilon = self.weight.new(self.weight.shape).normal_()
             W = self.weight + epsilon * torch.exp(self.log_sigma2 / 2)
+            #采样权重值
         else:
             W = self.weights_clipped
         return F.linear(input, W) + self.bias
 
     @property
-    def weights_clipped(self):
+    def weights_clipped(self): #将超过阈值的权重钳制为0
         clip_mask = self.get_clip_mask()
         return torch.where(clip_mask, torch.zeros_like(self.weight), self.weight)
 
@@ -44,11 +46,11 @@ class LinearARD(nn.Module):
             self.bias.data.zero_()
         self.log_sigma2.data.fill_(self.ard_init)
 
-    def get_clip_mask(self):
-        log_alpha = self.log_alpha
+    def get_clip_mask(self):#获得钳制的mask
+        log_alpha = self.log_alpha #跟阈值比较
         return torch.ge(log_alpha, self.thresh)
 
-    def get_reg(self, **kwargs):
+    def get_reg(self, **kwargs):#返回KL散度项
         """
         Get weights regularization (KL(q(w)||p(w)) approximation)
         """
@@ -72,7 +74,7 @@ class LinearARD(nn.Module):
         return self.get_clip_mask().sum().cpu().numpy()
 
     @property
-    def log_alpha(self):
+    def log_alpha(self): #求log_alpha
         log_alpha = self.log_sigma2 - 2 * \
             torch.log(torch.abs(self.weight) + 1e-15)
         return torch.clamp(log_alpha, -10, 10)
@@ -89,7 +91,7 @@ class Conv2dARD(nn.Conv2d):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.ard_init = ard_init
-        self.log_sigma2 = Parameter(ard_init * torch.ones_like(self.weight))
+        self.log_sigma2 = Parameter(ard_init * torch.ones_like(self.weight)) #产生跟weight大小一样的alpha 
         # self.log_sigma2 = Parameter(2 * torch.log(torch.abs(self.weight) + eps).clone().detach()+ard_init*torch.ones_like(self.weight))
 
     def forward(self, input):
@@ -103,11 +105,12 @@ class Conv2dARD(nn.Conv2d):
         W = self.weight
         zeros = torch.zeros_like(W)
         clip_mask = self.get_clip_mask()
+        #使用重参数化技巧，其均值没有变化
         conved_mu = F.conv2d(input, W, self.bias, self.stride,
                              self.padding, self.dilation, self.groups)
         log_alpha = self.log_alpha
         conved_si = torch.sqrt(1e-15 + F.conv2d(input * input,
-                                                torch.exp(log_alpha) * W *
+                                                torch.exp(log_alpha) * W *  #其实等价于log_sigma2
                                                 W, self.bias, self.stride,
                                                 self.padding, self.dilation, self.groups))
         conved = conved_mu + \
